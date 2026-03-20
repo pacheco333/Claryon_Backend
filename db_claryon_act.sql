@@ -14,6 +14,8 @@ CREATE TABLE Usuarios (
   fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE Usuarios
+ADD COLUMN firma VARCHAR(255);
 
 CREATE TABLE Permisos_Usuario (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -87,6 +89,10 @@ CREATE TABLE PazSalvos (
   FOREIGN KEY (id_resp_glpi) REFERENCES Usuarios(id),
   FOREIGN KEY (id_resp_acronics) REFERENCES Usuarios(id)
 );	
+
+
+-- Agregar indices (Tabla paz y salvos) responsables de las etapas
+
 
 
 

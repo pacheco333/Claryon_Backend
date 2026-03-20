@@ -1,92 +1,94 @@
 import PDFDocument from "pdfkit";
-import fs from "fs";
-import axios from "axios";
 import { pool } from "../config/db.js";
 
-export const generatePazysalvoPdf = async (req, res) => {
+const formatDate = (value) => {
+    if (!value) return "No disponible";
+
+    if (value instanceof Date) {
+        const day = String(value.getDate()).padStart(2, "0");
+        const month = String(value.getMonth() + 1).padStart(2, "0");
+        const year = value.getFullYear();
+        return `${day}/${month}/${year}`;
+    }
+
+    const dateStr = String(value).slice(0, 10);
+    const parts = dateStr.split("-");
+    if (parts.length === 3) {
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+
+    return "No disponible";
+};
+
+export const descargarPazysalvoPdf = async (req, res) => {
     try {
         const { id } = req.params;
+
         const [rows] = await pool.query(
-            `SELECT p.*,
-                    e.nombres AS empleado_nombres, e.apellidos AS empleado_apellidos,
-                    u.nombres AS responsable_nombres, u.apellidos AS responsable_apellidos
-             FROM Pazysalvo p
-             LEFT JOIN Empleados e ON p.id_empleado = e.id
-             LEFT JOIN Usuarios u ON p.id_responsable = u.id
-             WHERE p.id = ?`,
+            `SELECT 
+                ps.id,
+                ps.id_empleado,
+                ps.fecha_inicio,
+                ps.fecha_fin,
+                ps.estado,
+                e.nombres,
+                e.apellidos,
+                e.correo,
+                e.puesto,
+                e.compania,
+                e.area,
+                TRIM(CONCAT(IFNULL(u.nombres, ''), ' ', IFNULL(u.apellidos, ''))) AS creado_por_nombre
+             FROM PazSalvos ps
+             LEFT JOIN Empleados e ON ps.id_empleado = e.id
+             LEFT JOIN Usuarios u ON ps.id_creado_por = u.id
+             WHERE ps.id = ? AND ps.eliminado = FALSE AND ps.estado != 'Anulado'`,
             [id]
         );
 
-        if (!rows || rows.length === 0) return res.status(404).json({ message: "Paz y salvo no encontrado" });
-        const data = rows[0];
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ message: "Paz y salvo no encontrado" });
+        }
+
+        const pazSalvo = rows[0];
+        if (pazSalvo.estado !== "Completado") {
+            return res.status(400).json({ message: "Solo se puede descargar el PDF de paz y salvos completados" });
+        }
+
+        const fullName = `${pazSalvo.nombres || ""} ${pazSalvo.apellidos || ""}`.trim() || "No disponible";
+        const fileName = `paz_y_salvo_${pazSalvo.id}.pdf`;
 
         res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Disposition", `inline; filename="pazysalvo-${id}.pdf"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
 
         const doc = new PDFDocument({ size: "A4", margin: 50 });
         doc.pipe(res);
 
-        // Encabezado
-        doc.fontSize(16).font("Helvetica-Bold").text("Formato Interno - Paz y Salvo", { align: "center" });
+        doc.fontSize(20).text("PAZ Y SALVO", { align: "center" });
+        doc.moveDown(1.5);
+
+        doc.fontSize(13).text("Informacion del paz salvo", { underline: true });
         doc.moveDown(0.5);
-        doc.fontSize(9).font("Helvetica").text(`ID: ${data.id}`, { align: "right" });
+        doc.fontSize(11).text(`ID Paz y Salvo: ${pazSalvo.id}`);
+        doc.text(`Creado por: ${pazSalvo.creado_por_nombre || "No disponible"}`);
+        doc.text(`Fecha de inicio: ${formatDate(pazSalvo.fecha_inicio)}`);
+        doc.text(`Fecha de fin: ${formatDate(pazSalvo.fecha_fin)}`);
+        doc.moveDown();
+
+        doc.fontSize(13).text("Informacion del colaborador", { underline: true });
         doc.moveDown(0.5);
-        doc.moveTo(doc.x, doc.y).lineTo(doc.page.width - doc.options.margin, doc.y).stroke();
-
-        // Datos principales
-        doc.moveDown(1);
-        doc.fontSize(11).font("Helvetica-Bold").text("Empleado:");
-        doc.fontSize(10).font("Helvetica")
-           .text(`${data.empleado_nombres || ""} ${data.empleado_apellidos || ""}`)
-           .moveDown(0.5);
-
-        doc.fontSize(11).font("Helvetica-Bold").text("Responsable:");
-        doc.fontSize(10).font("Helvetica")
-           .text(`${data.responsable_nombres || ""} ${data.responsable_apellidos || ""}`)
-           .moveDown(0.5);
-
-        doc.fontSize(11).font("Helvetica-Bold").text("Observaciones:");
-        doc.fontSize(10).font("Helvetica").text(data.observaciones || "—", { align: "left" });
-
-        // Fecha
-        doc.moveDown(1);
-        const fecha = data.fecha_creacion ? new Date(data.fecha_creacion).toLocaleString() : "";
-        doc.fontSize(9).text(`Fecha de creación: ${fecha}`);
-
-        // Función auxiliar para imágenes (URLs o rutas locales)
-        const renderImageIfExists = async (imgPath, x, y, opts = {}) => {
-            if (!imgPath) return;
-            try {
-                if (/^https?:\/\//i.test(imgPath)) {
-                    const resp = await axios.get(imgPath, { responseType: "arraybuffer" });
-                    doc.image(Buffer.from(resp.data), x, y, opts);
-                } else if (fs.existsSync(imgPath)) {
-                    doc.image(imgPath, x, y, opts);
-                }
-            } catch (err) {
-                // ignorar errores de imagen
-            }
-        };
-
-        // Añadir imágenes si existen
-        const imageY = doc.y + 10;
-        await renderImageIfExists(data.fotografia_1, doc.x, imageY, { fit: [220, 160] });
-        await renderImageIfExists(data.fotografia_2, doc.x + 240, imageY, { fit: [220, 160] });
-
-        // Firmas
-        doc.moveDown(12);
-        const colWidth = (doc.page.width - doc.options.margin * 2) / 2;
-        const startX = doc.x;
-        const startY = doc.y;
-        doc.lineWidth(0.5);
-        doc.moveTo(startX, startY).lineTo(startX + colWidth - 20, startY).stroke();
-        doc.text("Firma Responsable", startX, startY + 6, { width: colWidth - 20, align: "left" });
-        doc.moveTo(startX + colWidth + 20, startY).lineTo(startX + colWidth * 2, startY).stroke();
-        doc.text("Firma Empleado", startX + colWidth + 20, startY + 6, { width: colWidth - 20, align: "left" });
+        doc.fontSize(11).text(`ID Empleado: ${pazSalvo.id_empleado}`);
+        doc.text(`Nombre: ${fullName}`);
+        doc.text(`Correo: ${pazSalvo.correo || "No disponible"}`);
+        doc.text(`Puesto: ${pazSalvo.puesto || "No disponible"}`);
+        doc.text(`Area: ${pazSalvo.area || "No disponible"}`);
+        doc.text(`Compania: ${pazSalvo.compania || "No disponible"}`);
 
         doc.end();
     } catch (error) {
-        console.error("generatePazysalvoPdf:", error);
-        if (!res.headersSent) return res.status(500).json({ message: "Error al generar PDF", error: error.message });
+        console.error("descargarPazysalvoPdf:", error);
+        return res.status(500).json({
+            message: "Error al generar el PDF de paz y salvo",
+            error: error.message
+        });
     }
 };

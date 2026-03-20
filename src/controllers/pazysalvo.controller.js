@@ -1,4 +1,25 @@
 import { pool } from "../config/db.js";
+import { ETAPAS_CONFIG } from "../utils/etapasConfig.js";
+
+const buildEtapasCompletadasSql = (config) => {
+    if (!Array.isArray(config) || config.length === 0) return "0";
+    return `(${config
+        .map((etapa) => `IF(EXISTS(${etapa.completadoSubquery}), 1, 0)`)
+        .join(" + ")})`;
+};
+
+const etapasCompletadasSql = buildEtapasCompletadasSql(ETAPAS_CONFIG);
+const totalEtapas = Array.isArray(ETAPAS_CONFIG) ? ETAPAS_CONFIG.length : 0;
+
+const baseSelect = `ps.*,
+    e.nombres, e.apellidos, e.correo, e.puesto, e.compania, e.area,
+    TRIM(CONCAT(IFNULL(u.nombres,''), ' ', IFNULL(u.apellidos,''))) AS creado_por_nombre,
+    ${etapasCompletadasSql} AS etapas_completadas,
+    ${totalEtapas} AS total_etapas`;
+
+const baseJoins = `FROM PazSalvos ps
+    LEFT JOIN Empleados e ON ps.id_empleado = e.id
+    LEFT JOIN Usuarios u ON ps.id_creado_por = u.id`;
 
 /**
  * Este endpoint me trae los paz y salvos en páginas de 10.
@@ -12,40 +33,28 @@ export const getPazysalvosPaginated = async (req, res) => {
     try {
         const page = Math.max(1, Number(req.query.page) || 1);
         const limit = 10; // fijo
-        const offset = (page - 1) * limit;
 
-        const [countRows] = await pool.query("SELECT COUNT(*) AS total FROM PazSalvos WHERE estado != 'Anulado'");
+        const [countRows] = await pool.query(
+            "SELECT COUNT(*) AS total FROM PazSalvos WHERE estado != 'Anulado' AND eliminado = FALSE"
+        );
         const total = countRows[0]?.total || 0;
-       
+        const totalPages = total ? Math.ceil(total / limit) : 0;
+        const currentPage = totalPages && page > totalPages ? totalPages : page;
+        const offset = (currentPage - 1) * limit;
+
         const [rows] = await pool.query(
-            `SELECT ps.*,
-                    e.nombres, e.apellidos, e.correo, e.puesto, e.compania, e.area,
-                    TRIM(CONCAT(IFNULL(u.nombres,''), ' ', IFNULL(u.apellidos,''))) AS creado_por_nombre,
-                    (
-                        IF(EXISTS(SELECT 1 FROM Dispositivos d WHERE d.id_paz_salvo = ps.id AND d.eliminado = FALSE), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Plataformas p WHERE p.id_paz_salvo = ps.id AND p.eliminado = FALSE), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Lineas l WHERE l.id_paz_salvo = ps.id AND l.eliminado = FALSE), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_antivirus IS NOT NULL), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_copia_seguridad IS NOT NULL), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_erp IS NOT NULL), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_otras_licencias IS NOT NULL), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Glpi g WHERE g.id_paz_salvo = ps.id AND g.eliminado = FALSE), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Acronics a WHERE a.id_paz_salvo = ps.id AND a.eliminado = FALSE), 1, 0)
-                    ) AS etapas_completadas,
-                    9 AS total_etapas
-             FROM PazSalvos ps
-             LEFT JOIN Empleados e ON ps.id_empleado = e.id
-             LEFT JOIN Usuarios u ON ps.id_creado_por = u.id
-             WHERE ps.estado != 'Anulado'
+            `SELECT ${baseSelect}
+             ${baseJoins}
+             WHERE ps.estado != 'Anulado' AND ps.eliminado = FALSE
              ORDER BY ps.fecha_creacion DESC LIMIT ? OFFSET ?`,
             [limit, offset]
         );
 
         return res.json({
-            page,
+            page: currentPage,
             limit,
             total,
-            totalPages: Math.ceil(total / limit),
+            totalPages,
             results: rows
         });
     } catch (error) {
@@ -62,25 +71,9 @@ export const getPazysalvoById = async (req, res) => {
     try {
         const { id } = req.params;
         const [rows] = await pool.query(
-            `SELECT ps.*,
-                    e.nombres, e.apellidos, e.correo, e.puesto, e.compania, e.area,
-                    TRIM(CONCAT(IFNULL(u.nombres,''), ' ', IFNULL(u.apellidos,''))) AS creado_por_nombre,
-                    (
-                        IF(EXISTS(SELECT 1 FROM Dispositivos d WHERE d.id_paz_salvo = ps.id AND d.eliminado = FALSE), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Plataformas p WHERE p.id_paz_salvo = ps.id AND p.eliminado = FALSE), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Lineas l WHERE l.id_paz_salvo = ps.id AND l.eliminado = FALSE), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_antivirus IS NOT NULL), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_copia_seguridad IS NOT NULL), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_erp IS NOT NULL), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_otras_licencias IS NOT NULL), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Glpi g WHERE g.id_paz_salvo = ps.id AND g.eliminado = FALSE), 1, 0)
-                        + IF(EXISTS(SELECT 1 FROM Acronics a WHERE a.id_paz_salvo = ps.id AND a.eliminado = FALSE), 1, 0)
-                    ) AS etapas_completadas,
-                    9 AS total_etapas
-             FROM PazSalvos ps
-             LEFT JOIN Empleados e ON ps.id_empleado = e.id
-             LEFT JOIN Usuarios u ON ps.id_creado_por = u.id
-             WHERE ps.id = ? AND ps.estado != 'Anulado'`,
+            `SELECT ${baseSelect}
+             ${baseJoins}
+             WHERE ps.id = ? AND ps.estado != 'Anulado' AND ps.eliminado = FALSE`,
             [id]
         );
         if (!rows || rows.length === 0) return res.status(404).json({ message: "Paz y salvo no encontrado" });
@@ -179,99 +172,5 @@ export const getPazSalvosStats = async (req, res) => {
     } catch (error) {
         console.error("getPazSalvosStats:", error);
         return res.status(500).json({ message: "Error obteniendo estadísticas de paz y salvos", error: error.message });
-    }
-};
-
-// ==================== MIS PROCESOS ====================
-// Obtiene los paz y salvos asignados al usuario logueado con sus etapas
-export const getMisProcesos = async (req, res) => {
-    try {
-        const userId = req.user.id;
-
-        const [rows] = await pool.query(
-            `SELECT 
-                ps.id,
-                ps.id_empleado,
-                ps.estado,
-                TRIM(CONCAT(IFNULL(e.nombres,''), ' ', IFNULL(e.apellidos,''))) AS empleado_nombre,
-
-                IF(ps.id_resp_equipos = ?, 1, 0) AS asignado_equipos,
-                IF(ps.id_resp_plataformas = ?, 1, 0) AS asignado_plataformas,
-                IF(ps.id_resp_linea = ?, 1, 0) AS asignado_linea,
-                IF(ps.id_resp_antivirus = ?, 1, 0) AS asignado_antivirus,
-                IF(ps.id_resp_idrive = ?, 1, 0) AS asignado_idrive,
-                IF(ps.id_resp_sap = ?, 1, 0) AS asignado_sap,
-                IF(ps.id_resp_otras_lic = ?, 1, 0) AS asignado_otras_lic,
-                IF(ps.id_resp_glpi = ?, 1, 0) AS asignado_glpi,
-                IF(ps.id_resp_acronics = ?, 1, 0) AS asignado_acronics,
-
-                IF(EXISTS(SELECT 1 FROM Dispositivos d WHERE d.id_paz_salvo = ps.id AND d.eliminado = FALSE), 1, 0) AS completado_equipos,
-                IF(EXISTS(SELECT 1 FROM Plataformas p WHERE p.id_paz_salvo = ps.id AND p.eliminado = FALSE), 1, 0) AS completado_plataformas,
-                IF(EXISTS(SELECT 1 FROM Lineas l WHERE l.id_paz_salvo = ps.id AND l.eliminado = FALSE), 1, 0) AS completado_linea,
-                IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_antivirus IS NOT NULL), 1, 0) AS completado_antivirus,
-                IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_copia_seguridad IS NOT NULL), 1, 0) AS completado_idrive,
-                IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_erp IS NOT NULL), 1, 0) AS completado_sap,
-                IF(EXISTS(SELECT 1 FROM Licencias lic WHERE lic.id_paz_salvo = ps.id AND lic.eliminado = FALSE AND lic.responsable_otras_licencias IS NOT NULL), 1, 0) AS completado_otras_lic,
-                IF(EXISTS(SELECT 1 FROM Glpi g WHERE g.id_paz_salvo = ps.id AND g.eliminado = FALSE), 1, 0) AS completado_glpi,
-                IF(EXISTS(SELECT 1 FROM Acronics a WHERE a.id_paz_salvo = ps.id AND a.eliminado = FALSE), 1, 0) AS completado_acronics
-
-             FROM PazSalvos ps
-             LEFT JOIN Empleados e ON ps.id_empleado = e.id
-             WHERE ps.estado != 'Anulado'
-               AND ps.eliminado = FALSE
-               AND (
-                 ps.id_resp_equipos = ? OR
-                 ps.id_resp_plataformas = ? OR
-                 ps.id_resp_linea = ? OR
-                 ps.id_resp_antivirus = ? OR
-                 ps.id_resp_idrive = ? OR
-                 ps.id_resp_sap = ? OR
-                 ps.id_resp_otras_lic = ? OR
-                 ps.id_resp_glpi = ? OR
-                 ps.id_resp_acronics = ?
-               )
-             ORDER BY ps.fecha_creacion DESC`,
-            [
-                userId, userId, userId, userId, userId, userId, userId, userId, userId,
-                userId, userId, userId, userId, userId, userId, userId, userId, userId
-            ]
-        );
-
-        const ETAPAS_CONFIG = [
-            { key: 'equipos', nombre: 'Equipos', ruta: 'etapa-equipos' },
-            { key: 'plataformas', nombre: 'Plataformas', ruta: 'etapa-plataformas' },
-            { key: 'linea', nombre: 'Línea Telefónica', ruta: 'etapa-linea' },
-            { key: 'antivirus', nombre: 'Antivirus', ruta: 'etapa-antivirus' },
-            { key: 'idrive', nombre: 'iDrive', ruta: 'etapa-idrive' },
-            { key: 'sap', nombre: 'SAP', ruta: 'etapa-sap' },
-            { key: 'otras_lic', nombre: 'Otras Licencias', ruta: 'etapa-otras-licencias' },
-            { key: 'glpi', nombre: 'GLPI', ruta: 'etapa-glpi' },
-            { key: 'acronics', nombre: 'Acronics', ruta: 'etapa-acronics' },
-        ];
-
-        const results = rows.map(row => {
-            const etapas = [];
-            for (const cfg of ETAPAS_CONFIG) {
-                if (row[`asignado_${cfg.key}`]) {
-                    etapas.push({
-                        nombre: cfg.nombre,
-                        completada: !!row[`completado_${cfg.key}`],
-                        ruta: cfg.ruta
-                    });
-                }
-            }
-            return {
-                id: row.id,
-                id_empleado: row.id_empleado,
-                empleado_nombre: row.empleado_nombre,
-                estado: row.estado,
-                etapas
-            };
-        });
-
-        return res.json(results);
-    } catch (error) {
-        console.error("getMisProcesos:", error);
-        return res.status(500).json({ message: "Error al obtener mis procesos", error: error.message });
     }
 };

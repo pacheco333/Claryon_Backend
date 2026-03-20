@@ -1,9 +1,12 @@
 import express from "express";
-import * as PazysalvoPdfCtrl from "../controllers/pazysalvoPdf.controller.js";
-import { idPazysalvoValidator } from "../validators/pazysalvo.validator.js"; // usa tu validador existente
+import { descargarPazysalvoPdf } from "../controllers/pazysalvoPdf.controller.js";
+import { validateIdParam, handleValidationResult } from "../validators/common.validator.js";
+import { verificarToken } from "../middlewares/verificarToken.js";
 
 const router = express.Router();
-// Ruta independiente: monta este router, por ejemplo, en /pazysalvo-pdf
-router.get("/:id", idPazysalvoValidator, PazysalvoPdfCtrl.generatePazysalvoPdf);
+
+router.use(verificarToken);
+
+router.get("/:id", validateIdParam, handleValidationResult, descargarPazysalvoPdf);
 
 export default router;

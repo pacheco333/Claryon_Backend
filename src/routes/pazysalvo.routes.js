@@ -12,9 +12,6 @@ router.use(verificarToken);
 router.get("/stats", PazysalvoCtrl.getPazSalvosStats);
 router.get("/total", PazysalvoCtrl.getTotalPazSalvos);
 
-// Mis procesos (paz y salvos asignados al usuario logueado)
-router.get("/mis-procesos", PazysalvoCtrl.getMisProcesos);
-
 // CRUD endpoints
 router.get("/",PazysalvoCtrl.getPazysalvosPaginated);
 router.get("/:id", validateIdParam, idPazysalvoValidator, PazysalvoCtrl.getPazysalvoById);
